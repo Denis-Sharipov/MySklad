@@ -4,62 +4,74 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 
 @RestController
 @RequestMapping("/api/products")
 public class ProductController {
-    private List<Product> products = new ArrayList<>();
-
+    ConnectionUtility connectionUtility= new ConnectionUtility();
+    Connection connection;
 
 
     @GetMapping
-    public List<Product> getAllProducts() {
-        return products;
+    public ResultSet getAllProducts() throws SQLException {
+        connection = connectionUtility.getConnection();
+        ResultSet resultSet = connection.createStatement().executeQuery("SELECT * FROM romashka_table;");
+        connection.close();
+        resultSet.close();
+        return resultSet;
     }
 
     @GetMapping("/{name}")
-    public ResponseEntity<Product> getProductByName(@PathVariable String name) {
-        Optional<Product> product = products.stream().filter(p -> p.getName().equals(name)).findFirst();
-
-        return product.map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public Product getProductByName(@PathVariable String name) throws SQLException {
+        connection = connectionUtility.getConnection();
+        ResultSet productSet = connection.createStatement().executeQuery("SELECT * FROM romashka_table WHERE name = '" + name + "';");
+        connection.close();
+        return new Product(name, productSet.getString("description"), productSet.getInt("price"), productSet.getBoolean("in_stock"));
     }
 
     @PostMapping("/add")
     public Product addProduct(@RequestParam String name,
                               @RequestParam(required = false) String description,
                               @RequestParam(required = false) Integer price,
-                              @RequestParam(required = false) Boolean inStock) {
-        if (!getProductByName(name).equals(ResponseEntity.notFound().build()) || name.isBlank() || price < 0 || description.length() > 4096 || name.length() > 255){
+                              @RequestParam(required = false) Boolean inStock) throws SQLException {
+        connection = connectionUtility.getConnection();
+        ResultSet productSet = connection.createStatement().executeQuery("SELECT * FROM romashka_table WHERE name = '" + name + "';");
+        productSet.next();
+        if (productSet.isAfterLast() || name.isBlank() || price < 0 || description.length() > 4096 || name.length() > 255){
             return null;
         }
-        Product product = new Product(name, description, price, inStock);
-        products.add(product);
-        return product;
+        connection.createStatement().executeQuery("INSERT IGNORE INTO romashka_table (name, description, price, inStock) VALUES " + name + ", " + description + ", " + price + ", " + inStock + ";");
+        connection.commit();
+        connection.close();
+        return new Product(name, description, price, inStock);
     }
 
     @PutMapping("/{name}")
-    public ResponseEntity<Product> updateProduct(@PathVariable String name, @RequestBody @Valid Product product) {
-        if (getProductByName(name).equals(ResponseEntity.notFound().build()) || product.getPrice() < 0 || product.getDescription().length() > 4096 || product.getName().length() > 255){
+    public ResponseEntity<?> updateProduct(@PathVariable String name, @RequestBody @Valid Product product) throws SQLException {
+        if (getProductByName(name) == null || product.getPrice() < 0 || product.getDescription().length() > 4096 || product.getName().length() > 255){
             return null;
         }
-        for (Product p : products) {
-            if (p.getName().equals(name)) {
-                p.setDescription(product.getDescription());
-                p.setPrice(product.getPrice());
-                p.setInStock(product.isInStock());
-                return ResponseEntity.ok(p);
+        connection = connectionUtility.getConnection();
+        ResultSet productSet = connection.createStatement().executeQuery("SELECT * FROM romashka_table WHERE name = '" + name + "';");
+        productSet.next();
+        if (productSet.isFirst()){
+            connection.createStatement().executeQuery("UPDATE romashka_table SET price = " + product.getPrice() + " WHERE name = '" + name + "';");
+            connection.createStatement().executeQuery("UPDATE romashka_table SET in_stock = " + product.isInStock() + " WHERE name = '" + name + "';");
+            if (!product.getDescription().isBlank()) {
+                connection.createStatement().executeQuery("UPDATE romashka_table SET description = " + product.getDescription() + " WHERE name = '" + name + "';");
             }
+            return (ResponseEntity<?>) ResponseEntity.ok();
         }
         return ResponseEntity.notFound().build();
     }
 
     @DeleteMapping("/{name}")
-    public ResponseEntity<Void> deleteProduct(@PathVariable String name) {
-        products.removeIf(p -> p.getName().equals(name));
+    public ResponseEntity<Void> deleteProduct(@PathVariable String name) throws SQLException {
+        connection = connectionUtility.getConnection();
+        connection.createStatement().executeQuery("DELETE FROM romashka_table WHERE name = '" + name + "';");
         return ResponseEntity.noContent().build();
     }
 }
